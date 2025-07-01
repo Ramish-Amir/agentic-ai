@@ -69,8 +69,16 @@ record_unknown_question_json = {
     }
 }
 
-tools = [{"type": "function", "function": record_user_details_json},
-        {"type": "function", "function": record_unknown_question_json}]
+from typing import TypedDict, List, Dict, Any
+
+class Tool(TypedDict):
+    type: str
+    function: Dict[str, Any]
+
+tools: List[Tool] = [
+    {"type": "function", "function": record_user_details_json},
+    {"type": "function", "function": record_unknown_question_json}
+]
 
 
 class Me:
@@ -91,10 +99,28 @@ class Me:
     def handle_tool_call(self, tool_calls):
         results = []
         for tool_call in tool_calls:
+            # The tool_calls argument is expected to be a list of objects, each representing a tool call as returned by the OpenAI chat completion API
+            # when the model requests a function/tool to be called. Each tool_call object typically has the following structure:
+            # {
+            #     "id": str,  # unique identifier for the tool call
+            #     "type": "function",
+            #     "function": {
+            #         "name": str,         # the name of the function/tool to call
+            #         "arguments": str     # a JSON string of arguments to pass to the function
+            #     }
+            # }
+            # This structure is defined by the OpenAI API for function/tool calls:
+            # https://platform.openai.com/docs/guides/function-calling
+            # We access .function.name and .function.arguments based on this documented structure.
+            
             tool_name = tool_call.function.name
             arguments = json.loads(tool_call.function.arguments)
+            # flush=True forces the print output to be written to the terminal immediately, without buffering
             print(f"Tool called: {tool_name}", flush=True)
             tool = globals().get(tool_name)
+            # Yes, using **arguments in Python when calling a function is similar to using the spread (...) operator in JavaScript to unpack an object into function arguments.
+            # For example, in JS: func(...args) or func({...obj}) unpacks the object properties as arguments.
+            # In Python, **arguments unpacks the dictionary as keyword arguments to the function.
             result = tool(**arguments) if tool else {}
             results.append({"role": "tool","content": json.dumps(result),"tool_call_id": tool_call.id})
         return results
@@ -113,18 +139,54 @@ If the user is engaging in discussion, try to steer them towards getting in touc
         return system_prompt
     
     def chat(self, message, history):
+        """
+        Handles a chat interaction with the user, maintaining conversation history and handling tool calls.
+
+        Args:
+            message (str): The latest user message.
+            history (list): List of previous messages in the conversation, each as a dict with 'role' and 'content'.
+
+        Returns:
+            str: The assistant's reply to the user.
+        """
+        # Construct the full message history for the model, starting with a system prompt,
+        # followed by the conversation history, and ending with the latest user message.
         messages = [{"role": "system", "content": self.system_prompt()}] + history + [{"role": "user", "content": message}]
         done = False
+
+        # Enter a loop to handle the conversation, including any tool calls requested by the model.
+        # The loop is necessary because the model might need multiple rounds of tool calls before
+        # providing a final answer. For example: get weather data → analyze weather → make recommendation.
+        # Each tool call result is fed back to the model so it can make informed decisions in subsequent calls.
         while not done:
+            # Send the current messages to the OpenAI API, requesting a chat completion.
+            # The 'tools' argument provides the available function/tool definitions.
             response = self.openai.chat.completions.create(model="gpt-4o-mini", messages=messages, tools=tools)
-            if response.choices[0].finish_reason=="tool_calls":
+            
+            # Check if the model's response indicates that a tool/function should be called.
+            # The structure of 'response' is defined by the OpenAI Python SDK (openai>=1.0.0).
+            # Specifically, openai.chat.completions.create returns a 'ChatCompletion' object.
+            # The structure is documented at: https://platform.openai.com/docs/api-reference/chat/object
+            # In the OpenAI Python SDK, the response object has a 'choices' attribute (a list),
+            # where each choice has a 'message' (with 'role', 'content', and possibly 'tool_calls'),
+            # and a 'finish_reason' indicating why the model stopped (e.g., "stop", "tool_calls").
+            if response.choices[0].finish_reason == "tool_calls":
+                # Extract the message and the tool calls requested by the model.
                 message = response.choices[0].message
                 tool_calls = message.tool_calls
+
+                # Handle the tool calls by executing the corresponding functions and collecting their results.
                 results = self.handle_tool_call(tool_calls)
+
+                # Add the model's tool call message and the tool results to the message history,
+                # so the model can see the results in the next turn.
                 messages.append(message)
                 messages.extend(results)
             else:
+                # If no tool call is needed, the model's response is complete.
                 done = True
+
+        # Return the final assistant message content as the reply to the user.
         return response.choices[0].message.content
     
 
