@@ -117,7 +117,7 @@ class Me:
             arguments = json.loads(tool_call.function.arguments)
             # flush=True forces the print output to be written to the terminal immediately, without buffering
             print(f"Tool called: {tool_name}", flush=True)
-            tool = globals().get(tool_name)
+            tool = globals().get(tool_name) # OR tool = globals()[tool_name]
             # Yes, using **arguments in Python when calling a function is similar to using the spread (...) operator in JavaScript to unpack an object into function arguments.
             # For example, in JS: func(...args) or func({...obj}) unpacks the object properties as arguments.
             # In Python, **arguments unpacks the dictionary as keyword arguments to the function.
